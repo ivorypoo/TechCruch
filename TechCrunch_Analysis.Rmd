@@ -1,0 +1,207 @@
+---
+title: "TechCrunch Analysis"
+author: "Ivory Poo"
+date: "2/14/2017"
+output: html_document
+---
+
+
+**Question 1**: Extract all articles from the TechCrunch main page of their web site. Create a data frame of these articles. 
+```{r}
+library(rvest)
+library(magrittr)
+url <- read_html("https://techcrunch.com/")
+
+#Scrape the website for the movie rating
+title <- url %>% 
+  html_nodes(".post-title") %>%
+  html_text() %>%
+  as.character()
+
+abstract <- url %>% 
+  html_nodes(".excerpt") %>%
+  html_text() %>%
+  as.character()
+
+title_link <- url %>% 
+  html_nodes(".post-title a") %>%
+  html_attr("href") %>%
+  as.character()
+
+#article=data.frame()
+
+linktext<-function(x){
+  url_title<- read_html(x)
+  content <- url_title %>% html_nodes('.text')%>% html_text()%>%as.character()
+  content=unlist(content)
+}
+#bag<-lapply(title_link, FUN=linktext)
+bag=unlist(abstract)
+bag <- gsub( "[\"(){}<>\r\n\t]", " ", bag)
+bag<- gsub( "\\s+", " ", bag) 
+bag<- gsub( "… Read More", "", bag) 
+article=data.frame(matrix(bag, ncol=19, byrow=T))
+#bag
+#url_title<- html(title_link[1])
+```
+
+
+**Question 2**: Create a corpus of these articles, and then clean it of numbers, punctuation, stopwords, and stem the documents as well. 
+```{r}
+library(tm)
+text_corpus = Corpus(VectorSource(article))
+#print(as.character(text_corpus[[1]]))
+text_corpus_clean = tm_map(text_corpus,removeWords,stopwords("english"))
+text_corpus_clean = tm_map(text_corpus_clean,removePunctuation)
+text_corpus_clean = tm_map(text_corpus_clean,removeNumbers)
+text_corpus_clean = tm_map(text_corpus_clean,stemDocument)
+print(as.character(text_corpus_clean[[1]]))
+```
+
+
+**Question 3**: Create a term document matrix from the corpus and print the top 50 lines. What is the dimension of the TDM?
+```{r}
+tdm = TermDocumentMatrix(text_corpus_clean,control=list(minWordLength=1))
+dim(tdm)
+tdm_matrix=as.matrix(tdm)
+tdm_matrix[1:50,]
+```
+
+
+
+**Question 4**: From the TDM, make a network adjacency matrix of words. Assume two words are linked once if they appear in the same document. If they co-occur in say, three documents, then they are connected by strength 3. Based on co-occurrence withim documents, create the adjacency matrix of words, where the words are nodes, and their co-occurrences provide the data for the links. 
+```{r}
+tdm_matrix[tdm_matrix>=1] <- 1    # change the TDM into Boolean matrix
+
+# term adjacency matrix
+term_matrix <- tdm_matrix %*% t(tdm_matrix)
+term_matrix[1:10,1:10]
+```
+
+
+**Question 5**: Convert the Adjacency Matrix into a Edge List (This is just a two column listing of nodes from and nodes to.)
+```{r}
+library(igraph)
+g <- graph.adjacency(term_matrix, weighted=T, mode = "undirected")
+g <- simplify(g)
+V(g)$label <- V(g)$name
+V(g)$degree <- degree(g)
+ed=get.edgelist(g, names=TRUE)
+ed[1:10,]
+```
+
+**Question 6**: Using the edge list, create a spring force plot using D3. Redo the same plot, but zero out all edges which have value 1, and keep all edges with values 2 or greater. How different are the two plots, describe the difference. 
+
+Answer:The spring force plot with value 2 or greater are more scattered than the spring force plot with value 1 or greater.
+```{r}
+library(reshape2)
+library(networkD3)
+library(htmlwidgets)
+
+el <- melt(term_matrix)
+el<-el[el$value!=0,]
+colnames(el)<-c("V1","from","value")
+term_number <- as.matrix(tdm$dimnames$Terms)
+term_number <- as.data.frame(term_number)
+term_number$code <- seq(1:length(term_number$V1))
+el=merge(el,term_number,by="V1")
+colnames(el)<-c("to","V1","value","to_code")
+el=merge(el,term_number,by="V1")
+colnames(el)<-c("to","from","value","to_code","from_code")
+#subsetting to only the first 1000 terms
+el_sub=el[1:1000,] 
+el1=el_sub[,3:5]
+colnames(el1)<-c("value","target","source")
+#nodes = data.frame(unique(el_sub$from, el_sub$to))
+nodes = data.frame(term_number[,1])
+names(nodes) = "name"
+nodes$group = ceiling(3*runif(length(nodes$name)))
+#create forcenetwork for orginal data
+links1 = el1[,2:3]-1 
+links1$value = el1$value
+y=forceNetwork(Links = links1, Nodes = nodes, Source = "source",
+             Target = "target", Value = "value", NodeID = "name",
+             Group = "group", opacity = 0.8, fontSize = 75)
+saveWidget(y, file="\\springforceplot1.html")
+y
+```
+
+```{r}
+#getting rid values 1 
+
+el2=el_sub[el_sub$value!=1,]
+el3=el2[,3:5]
+colnames(el3)<-c("value","target","source")
+#nodes = data.frame(unique(el2$from, el2$to))
+nodes = data.frame(term_number[,1])
+names(nodes) = "name"
+nodes$group = ceiling(3*runif(length(nodes$name)))
+#create force network for orginal data
+links2 = el3[,2:3]-1
+links2$value = el3$value
+
+x=forceNetwork(Links = links2, Nodes = nodes, Source = "source",
+             Target = "target", Value = "value", NodeID = "name",
+             Group = "group", opacity = 0.8, fontSize = 75)
+saveWidget(x, file="\\springforceplot2.html")
+#please see the seperate file for the plot
+x
+```
+
+**Question 7**: Plot the degree distribution of your word network. 
+```{r}
+dd = degree.distribution(g) # for each of the 30 nodes, what is the degree of connections
+dd = as.matrix(dd)
+d = as.matrix(seq(0,max(degree(g)))) #sequence of numbers of degree
+plot(d,dd,type="l")
+```
+
+
+
+**Question 8**: Calculate the centrality of the words in the network. What are the top 10 central words? What conclusions can you state from this? 
+
+The central words in this network tells us that based from the words in the excerpt, there appears to be a lot of teams and companies mentioned.This makes sense since TechCrunch specifies in articles about current events of tech companies and teams. In addition, the words 'percent', 'better' and 'perform' are also among the top 10 words, which are common words to describe the performance and status of companies. The word 'round' is also a popular term, most likely from the term Series A or B 'round', broadcasting a startup company's financial status and success in Silicon Valley.
+```{r}
+cent = evcent(g)$vector
+print("Normalized Centrality Scores")
+print(cent)
+sorted_cent = sort(cent,decreasing=TRUE,index.return=TRUE)
+Scent = sorted_cent$x
+Scent[1:10]
+```
+
+
+**Question 9**: Form "communities" of words, and state any regularities you may see from these communities. You may decide on the setting for the size of these communities as you prefer. 
+
+Answer:
+The regularity is that within each community, there appears to be a common theme. Some examples include:
+
+Community 12: seems to be more technical, with words such as 'stackoverflow', 'robot', 'program', 'corpus'.
+
+Community 5: appears to be about financing companies, with terms such as 'acquisit', 'marketplac', 'stock'
+
+
+```{r}
+wtc = walktrap.community(g)
+res=membership(wtc)
+print(res)
+sort(res,decreasing=TRUE)
+```
+
+
+**Question 10**: What is the diameter of the network? Why is this interesting?
+
+Answer:The diameter of the network is 3 and this is interesting because we want to know how quickly things are spreading in a network and a diameter of 3 suggests that it is spreading pretty quickly.
+```{r}
+print(diameter(g))
+```
+
+
+
+
+
+
+
+
+
+
